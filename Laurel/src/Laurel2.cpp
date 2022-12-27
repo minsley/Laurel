@@ -1,7 +1,18 @@
+#include <Arduino.h>
 //#include "Adafruit_seesaw.h"
-#include "net_config.h"
+#include "config.h"
 #include "oled.h"
 #include "soilSensor.h"
+
+void updateDisplay();
+void displayDebug();
+void printDebug();
+bool soilIsTooDry();
+void handleSetThreshold(AdafruitIO_Data *data);
+void handleRemoteWater(AdafruitIO_Data *data);
+void handleRemoteWaterDuration(AdafruitIO_Data *data);
+void handleRemoteSoakDuration(AdafruitIO_Data *data);
+void handleMillis(char *data, uint16_t len);
 
 bool showDebug = false;
 
@@ -41,24 +52,36 @@ int lineEnd = 63 - lineGap;
 
 // set up the 'time/milliseconds' topic
 AdafruitIO_Time *msecs = io.time(AIO_TIME_MILLIS);
-int currTime;
-int realTime;
-int timeOffset;
+long currTime;
+long realTime;
+long timeOffset;
+
+AdafruitIO_Feed *waterThreshold = io.feed("laurelWaterThreshold");
+AdafruitIO_Feed *waterDurationFeed = io.feed("laurelWaterDuration");
+AdafruitIO_Feed *soakDurationFeed = io.feed("laurelSoakDuration");
+
+AdafruitIO_Feed *moistnessFeed = io.feed("laurelCurrentMoisture");
+AdafruitIO_Feed *lastWateredFeed = io.feed("laurelLastWatered");
+
+AdafruitIO_Feed *remoteWater = io.feed("laurelRemoteWaterCommand");
+bool aioSaysWaterNow = false;
+int nextAioUpdate;
+int aioUpdatePeriod = 30000;
 
 void setup() {
   Serial.begin(115200);
 
-//  Serial.print("Connecting to AdafruitIO");
-//  io.connect();
-//
-//  while(io.mqttStatus() < AIO_CONNECTED) {
-//    Serial.print(".");
-//    delay(500);
-//  }
-//  Serial.println(io.statusText());
-////
-//  // attach a message handler for the msecs feed
-//  msecs->onMessage(handleMillis);
+  Serial.print("Connecting to AdafruitIO");
+  io.connect();
+
+  while(io.mqttStatus() < AIO_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println(io.statusText());
+  //
+  // attach a message handler for the msecs feed
+  msecs->onMessage(handleMillis);
 
   if (!initOled()) {
     Serial.println("ERROR! oled not found");
@@ -82,13 +105,25 @@ void setup() {
   digitalWrite(LED, LOW);
   
 //  pinMode(waterSensorPin, INPUT);
+
+  waterThreshold->onMessage(handleSetThreshold);
+  waterThreshold->save(soilDryLevel);
+
+  waterDurationFeed->onMessage(handleRemoteWaterDuration);
+  waterDurationFeed->save(waterDuration);
+
+  soakDurationFeed->onMessage(handleRemoteSoakDuration);
+  soakDurationFeed->save(soakDuration);
+
+  remoteWater->onMessage(handleRemoteWater);
+  remoteWater->save(aioSaysWaterNow);
   
   Serial.println();
 }
 
 void loop() 
 {
-//  io.run();
+  io.run();
   
 //  waterLevel = analogRead(waterSensorPin);
 //  hasWater = waterLevel > 300;
@@ -112,7 +147,7 @@ void loop()
   }
 
   // run the motor if we're in a wateringWindow, or the test button is pressed
-  motorOn = wateringDoneTime > currTime || !digitalRead(BUTTON_A);
+  motorOn = wateringDoneTime > currTime || !digitalRead(BUTTON_A) || aioSaysWaterNow;
   
   if(motorOn){
     digitalWrite(LED, HIGH);
@@ -132,6 +167,12 @@ void loop()
   {
     updateDisplay();
   }
+
+  if(currTime > nextAioUpdate) {
+    nextAioUpdate = currTime + aioUpdatePeriod;
+    moistnessFeed->save(soilRes);
+    lastWateredFeed->save(lastWatered);
+  }
 }
 
 bool soilIsTooDry()
@@ -143,16 +184,48 @@ bool soilIsTooDry()
 // message handler for the milliseconds feed
 void handleMillis(char *data, uint16_t len) 
 {
-  char timeBuf[len+1];
-  for(int i=0; i<len; i++)
-  {
-    timeBuf[i] = data[i];
-  }
-  timeBuf[len+1] = '\0';
+  // char timeBuf[len+1];
+  // for(int i=0; i<len; i++)
+  // {
+  //   timeBuf[i] = data[i];
+  // }
+  // timeBuf[len+1] = '\0';
   
-  timeOffset = atoi(timeBuf) - millis();
-  Serial.print("Millis Feed: ");
-  Serial.println(data);
+  // timeOffset = atol(timeBuf) - millis();
+  // Serial.print("Millis Feed: ");
+  // Serial.println(data);
+}
+
+void handleSetThreshold(AdafruitIO_Data *data) 
+{
+  int thresh = data->toInt();
+  Serial.print("AIO set threshold: ");
+  Serial.println(thresh);
+  soilDryLevel = thresh;
+}
+
+void handleRemoteWater(AdafruitIO_Data *data) 
+{
+  int waterCmd = data->toBool();
+  Serial.print("AIO set water cmd: ");
+  Serial.println(waterCmd);
+  aioSaysWaterNow = waterCmd;
+}
+
+void handleRemoteWaterDuration(AdafruitIO_Data *data) 
+{
+  int dur = data->toInt();
+  Serial.print("AIO set water duration cmd: ");
+  Serial.println(dur);
+  waterDuration = dur;
+}
+
+void handleRemoteSoakDuration(AdafruitIO_Data *data) 
+{
+  int soak = data->toInt();
+  Serial.print("AIO set soak: ");
+  Serial.println(soak);
+  soakDuration = soak;
 }
 
 void updateDisplay()
