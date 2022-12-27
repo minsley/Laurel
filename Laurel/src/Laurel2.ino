@@ -6,8 +6,8 @@
 bool showDebug = false;
 
 int waterDuration = 30000; // in millis
-int soakDuration = 120000; // in millis
-int soilDryLevel = 2400;
+int soakDuration = 180000; // in millis
+int soilDryLevel = 2200;
 int lastWatered;
 
 int tempC;
